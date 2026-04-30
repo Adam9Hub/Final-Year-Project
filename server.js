@@ -23,12 +23,12 @@ app.use((req, res, next) => {
 });
 
 // Initialize SQLite Database
-const dbPath = join(__dirname, 'medimind.db');
+const dbPath = join(__dirname, 'medimind-app', 'medimind.db');
 const db = new sqlite3.Database(dbPath, (err) => {
     if (err) {
         console.error('Error opening database', err);
     } else {
-        console.log('Connected to SQLite database at medimind.db');
+        console.log('Connected to SQLite database at medimind-app/medimind.db');
 
         // Create tables if they don't exist
         db.serialize(() => {
@@ -74,29 +74,6 @@ const db = new sqlite3.Database(dbPath, (err) => {
                     FOREIGN KEY (caregiver_id) REFERENCES users(id)
                 )
             `);
-
-            // Seed initial generic data if tables are empty
-            db.get('SELECT COUNT(*) as count FROM users', (err, row) => {
-                if (row && row.count === 0) {
-                    const hash = bcrypt.hashSync('password123', 10);
-                    db.run(`INSERT INTO users (name, fullName, email, password, role, caringFor, avatar) VALUES 
-                        ('Margaret', 'Margaret Chen', 'margaret@email.com', ?, 'patient', NULL, 'M'),
-                        ('David', 'David Chen', 'david@email.com', ?, 'caretaker', 'Margaret Chen', 'D')
-                    `, [hash, hash]);
-                    console.log('Seeded initial users');
-                }
-            });
-
-            db.get('SELECT COUNT(*) as count FROM medications', (err, row) => {
-                if (row && row.count === 0) {
-                    // Seed meds only for the demo patient (user_id = 1)
-                    db.run(`INSERT INTO medications (user_id, name, dosage, frequency, instructions, color, times) VALUES 
-                        (1, 'Metformin', '500mg', 'Twice daily', 'Take with food', 'blue', '["7:00 AM", "7:00 PM"]'),
-                        (1, 'Lisinopril', '10mg', 'Once daily', '', 'green', '["7:00 AM"]')
-                    `);
-                    console.log('Seeded initial medications for demo patient');
-                }
-            });
 
             // Migration: add push_token column if it doesn't exist
             db.all("PRAGMA table_info(users)", (err, cols) => {
@@ -394,7 +371,7 @@ app.get('/api/users/:id/partner-phone', (req, res) => {
 
 // Get all registered users (for viewing in SQLite extension)
 app.get('/api/users', (req, res) => {
-    db.all('SELECT id, name, fullName, email, role, avatar, created_at FROM users', [], (err, rows) => {
+    db.all('SELECT id, name, fullName, email, role, avatar, caringFor, created_at FROM users', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(rows);
     });

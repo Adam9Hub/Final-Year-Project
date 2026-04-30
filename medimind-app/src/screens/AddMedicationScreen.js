@@ -223,6 +223,16 @@ export default function AddMedicationScreen({ route, navigation }) {
         return ['5mg', '10mg', '25mg', '50mg', '100mg', '250mg', '500mg', '1000mg'];
     }, [selectedMedData]);
 
+    // Extract the dosage unit from the selected medication's options (e.g. 'mg', 'mcg', 'ml', 'IU', 'units')
+    const dosageUnit = useMemo(() => {
+        const options = selectedMedData?.dosages || [];
+        if (options.length > 0) {
+            const match = options[0].match(/[a-zA-Z/%]+(\/[a-zA-Z0-9]+)*/); // e.g. 'mg', 'mcg', 'IU', 'mg/kg IV'
+            if (match) return match[0];
+        }
+        return 'mg';
+    }, [selectedMedData]);
+
     // Filtered medication list for search + category
     const filteredMeds = useMemo(() => {
         let list = MEDICATION_DB;
@@ -306,22 +316,31 @@ export default function AddMedicationScreen({ route, navigation }) {
         const medNameLower = name.trim().toLowerCase();
         let maxDailyLimit = null;
 
-        for (const [dbName, limit] of Object.entries(maxDosageMap)) {
-            if (medNameLower.includes(dbName)) {
-                maxDailyLimit = limit;
-                break;
+        // 1. Try exact match first (most reliable)
+        if (maxDosageMap[medNameLower] !== undefined) {
+            maxDailyLimit = maxDosageMap[medNameLower];
+        } else {
+            // 2. Fallback: find the longest substring match (most specific)
+            let bestMatchLength = 0;
+            for (const [dbName, limit] of Object.entries(maxDosageMap)) {
+                if (medNameLower.includes(dbName) && dbName.length > bestMatchLength) {
+                    bestMatchLength = dbName.length;
+                    maxDailyLimit = limit;
+                }
             }
         }
 
         if (maxDailyLimit !== null && dosage.trim()) {
-            const dosageMatch = dosage.match(/(\d+\.?\d*)\s*(\S+)?/);
-            if (dosageMatch) {
-                const singleDose = parseFloat(dosageMatch[1]);
-                const unit = dosageMatch[2] || 'mg';
+            // Extract the numeric value from dosage strings like '750mg', '10 units', '5.5ml'
+            const numericPart = dosage.match(/(\d+\.?\d*)/);
+            const unitPart = dosage.match(/[a-zA-Z/%]+/);
+            if (numericPart) {
+                const singleDose = parseFloat(numericPart[1]);
+                const unit = unitPart ? unitPart[0] : 'mg';
                 const dosesPerDay = times.filter(t => t.trim()).length || 1;
                 const dailyTotal = singleDose * dosesPerDay;
 
-                if (dailyTotal > maxDailyLimit) {
+                if (dailyTotal >= maxDailyLimit) {
                     Alert.alert(
                         'Overdose Warning ⚠️',
                         `The safe maximum daily limit for ${name} is ${maxDailyLimit}${unit}.\n\nYou have scheduled ${singleDose}${unit} × ${dosesPerDay} doses = ${dailyTotal}${unit} per day.\n\nPlease reduce the dosage or frequency to safely proceed.`,
@@ -568,6 +587,7 @@ export default function AddMedicationScreen({ route, navigation }) {
 
             {/* ── Dosage Picker Modal ── */}
             <Modal visible={showDosagePicker} animationType="slide" transparent>
+                <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
                         <View style={styles.modalHeader}>
@@ -594,20 +614,30 @@ export default function AddMedicationScreen({ route, navigation }) {
                         <View style={styles.customDosageRow}>
                             <TextInput
                                 style={[styles.input, { flex: 1 }]}
-                                placeholder="e.g. 750mg"
+                                placeholder="e.g. 750"
                                 placeholderTextColor={colors.textMuted}
-                                value={dosage}
-                                onChangeText={setDosage}
+                                value={dosage.replace(/[a-zA-Z/%]+(\/[a-zA-Z0-9]*)*/g, '').trim()}
+                                onChangeText={(text) => {
+                                    const numOnly = text.replace(/[^0-9.]/g, '');
+                                    setDosage(numOnly ? `${numOnly}${dosageUnit}` : '');
+                                }}
+                                keyboardType="decimal-pad"
                             />
-                            <TouchableOpacity
-                                style={styles.confirmBtn}
-                                onPress={() => setShowDosagePicker(false)}
-                            >
-                                <Text style={styles.confirmBtnText}>Done</Text>
-                            </TouchableOpacity>
+                            <View style={styles.unitBadge}>
+                                <Text style={styles.unitBadgeText}>{dosageUnit}</Text>
+                            </View>
                         </View>
+                        <TouchableOpacity
+                            style={styles.confirmFullBtn}
+                            onPress={() => setShowDosagePicker(false)}
+                            activeOpacity={0.8}
+                        >
+                            <Ionicons name="checkmark-circle" size={20} color={colors.white} />
+                            <Text style={styles.confirmFullBtnText}>Done</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
+                </KeyboardAvoidingView>
             </Modal>
 
             {/* ── Time Picker Modal (Wheel) ── */}
@@ -896,6 +926,22 @@ const styles = StyleSheet.create({
     customDosageRow: {
         flexDirection: 'row',
         gap: spacing.sm,
+        alignItems: 'center',
+    },
+    unitBadge: {
+        backgroundColor: colors.bgSecondary,
+        borderRadius: borderRadius.md,
+        paddingHorizontal: spacing.md,
+        paddingVertical: spacing.md,
+        borderWidth: 1,
+        borderColor: colors.border,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    unitBadgeText: {
+        fontSize: fs.md,
+        fontWeight: '700',
+        color: colors.textSecondary,
     },
     confirmBtn: {
         backgroundColor: colors.bluePrimary,

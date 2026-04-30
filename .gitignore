@@ -28,8 +28,8 @@ dist-ssr
 medimind.db
 
 # Old website files (kept locally, excluded from repo)
-src/
-public/
+/src/
+/public/
 .expo/
 dev_logs.txt
 eslint.config.js
