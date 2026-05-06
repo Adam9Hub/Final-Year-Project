@@ -49,12 +49,15 @@ export default function PatientHomeScreen({ navigation }) {
 
     // Build a set of medication IDs that are currently available (scheduled time has arrived)
     const availableMedIds = new Set();
+    const takenMedIds = new Set(); // Meds whose schedule slot is already marked taken
     const medNextTime = {}; // medId -> earliest future time string
     Object.entries(schedule).forEach(([timeKey, data]) => {
         if (!data.medications) return;
         const schedMinutes = parseTimeToMinutes(data.time || timeKey);
         data.medications.forEach(medId => {
-            if (schedMinutes <= nowMinutes) {
+            if (data.taken) {
+                takenMedIds.add(medId);
+            } else if (schedMinutes <= nowMinutes) {
                 availableMedIds.add(medId);
             } else if (!medNextTime[medId]) {
                 medNextTime[medId] = data.time || timeKey;
@@ -63,12 +66,17 @@ export default function PatientHomeScreen({ navigation }) {
     });
 
     const isMedAvailable = (medId) => availableMedIds.has(medId);
+    const isMedTaken = (medId) => takenMedIds.has(medId);
 
     const allTaken = Object.values(schedule).every((s) => s.taken);
-    const availableMeds = medications.filter(m => isMedAvailable(m.id));
+    const availableMeds = medications.filter(m => isMedAvailable(m.id) && !isMedTaken(m.id));
     const allMedsChecked = availableMeds.length > 0 && checkedMeds.size === availableMeds.length;
 
     const toggleMedCheck = (id) => {
+        if (isMedTaken(id)) {
+            showToast('This medication has already been taken', 'info');
+            return;
+        }
         if (!isMedAvailable(id)) {
             showToast('This medication isn\'t available until its scheduled time', 'alert');
             return;
@@ -204,25 +212,29 @@ export default function PatientHomeScreen({ navigation }) {
                     <Text style={styles.instructions}>Tap each medication as you take it:</Text>
                     {medications.map((med) => {
                         const isChecked = checkedMeds.has(med.id);
+                        const taken = isMedTaken(med.id);
                         const available = isMedAvailable(med.id);
                         const nextTime = medNextTime[med.id];
                         return (
                             <TouchableOpacity
                                 key={med.id}
-                                style={[styles.medRow, isChecked && styles.medRowChecked, !available && styles.medRowLocked]}
+                                style={[styles.medRow, taken ? styles.medRowTaken : isChecked ? styles.medRowChecked : !available ? styles.medRowLocked : null]}
                                 onPress={() => toggleMedCheck(med.id)}
-                                activeOpacity={available ? 0.7 : 1}
+                                activeOpacity={taken ? 1 : available ? 0.7 : 1}
+                                disabled={taken}
                             >
-                                <View style={[styles.medIcon, isChecked ? styles.medIconChecked : !available ? styles.medIconLocked : { backgroundColor: (medColors[med.color] || colors.bluePrimary) + '20' }]}>
+                                <View style={[styles.medIcon, taken ? styles.medIconTaken : isChecked ? styles.medIconChecked : !available ? styles.medIconLocked : { backgroundColor: (medColors[med.color] || colors.bluePrimary) + '20' }]}>
                                     <Ionicons
-                                        name={isChecked ? 'checkmark' : !available ? 'lock-closed' : 'medical'}
-                                        size={!available ? 16 : 20}
-                                        color={isChecked ? colors.white : !available ? colors.textMuted : medColors[med.color] || colors.bluePrimary}
+                                        name={taken ? 'checkmark-circle' : isChecked ? 'checkmark' : !available ? 'lock-closed' : 'medical'}
+                                        size={taken ? 22 : !available ? 16 : 20}
+                                        color={taken ? colors.white : isChecked ? colors.white : !available ? colors.textMuted : medColors[med.color] || colors.bluePrimary}
                                     />
                                 </View>
                                 <View style={styles.medInfo}>
-                                    <Text style={[styles.medName, isChecked && styles.medNameChecked, !available && styles.medNameLocked]} adjustsFontSizeToFit numberOfLines={1}>{med.name}</Text>
-                                    {available ? (
+                                    <Text style={[styles.medName, taken ? styles.medNameTaken : isChecked ? styles.medNameChecked : !available ? styles.medNameLocked : null]} adjustsFontSizeToFit numberOfLines={1}>{med.name}</Text>
+                                    {taken ? (
+                                        <Text style={styles.medTakenLabel}>Taken ✓</Text>
+                                    ) : available ? (
                                         <Text style={styles.medDosage}>{med.dosage}</Text>
                                     ) : (
                                         <Text style={styles.medLockedLabel}>
@@ -231,8 +243,8 @@ export default function PatientHomeScreen({ navigation }) {
                                         </Text>
                                     )}
                                 </View>
-                                <View style={[styles.checkCircle, isChecked && styles.checkCircleActive, !available && styles.checkCircleLocked]}>
-                                    {isChecked && <Ionicons name="checkmark" size={16} color={colors.white} />}
+                                <View style={[styles.checkCircle, taken ? styles.checkCircleTaken : isChecked ? styles.checkCircleActive : !available ? styles.checkCircleLocked : null]}>
+                                    {(taken || isChecked) && <Ionicons name="checkmark" size={16} color={colors.white} />}
                                 </View>
                             </TouchableOpacity>
                         );
@@ -338,18 +350,23 @@ const styles = StyleSheet.create({
     instructions: { fontSize: fs.sm, color: colors.textSecondary, marginBottom: spacing.md },
     medRow: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, borderRadius: borderRadius.md, marginBottom: spacing.sm, backgroundColor: colors.bgPrimary, gap: spacing.md },
     medRowChecked: { backgroundColor: colors.greenLight },
+    medRowTaken: { backgroundColor: colors.greenLight, opacity: 0.7 },
     medRowLocked: { backgroundColor: colors.bgSecondary || '#F0F0F0', opacity: 0.6 },
     medIcon: { width: normalize(40), height: normalize(40), borderRadius: borderRadius.md, justifyContent: 'center', alignItems: 'center' },
     medIconChecked: { backgroundColor: colors.greenPrimary },
+    medIconTaken: { backgroundColor: colors.greenPrimary },
     medIconLocked: { backgroundColor: (colors.textMuted || '#999') + '15' },
     medInfo: { flex: 1 },
     medName: { fontSize: fs.md, fontWeight: '600', color: colors.textPrimary },
     medNameChecked: { textDecorationLine: 'line-through', color: colors.textMuted },
+    medNameTaken: { color: colors.greenPrimary, fontWeight: '700' },
     medNameLocked: { color: colors.textMuted },
+    medTakenLabel: { fontSize: fs.sm, color: colors.greenPrimary, fontWeight: '600', marginTop: 1 },
     medDosage: { fontSize: fs.sm, color: colors.textSecondary },
     medLockedLabel: { fontSize: fs.xs, color: colors.textMuted, marginTop: 2 },
     checkCircle: { width: normalize(28), height: normalize(28), borderRadius: normalize(14), borderWidth: 2, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' },
     checkCircleActive: { backgroundColor: colors.greenPrimary, borderColor: colors.greenPrimary },
+    checkCircleTaken: { backgroundColor: colors.greenPrimary, borderColor: colors.greenPrimary },
     checkCircleLocked: { borderColor: colors.textMuted + '40', borderStyle: 'dashed' },
     cta: { backgroundColor: colors.bluePrimary, borderRadius: borderRadius.md, paddingVertical: spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md, ...shadows.md },
     ctaDisabled: { opacity: 0.5 },

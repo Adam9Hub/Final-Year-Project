@@ -75,7 +75,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 )
             `);
 
-            // Migration: add push_token column if it doesn't exist
+            // Migration: add columns if they don't exist
             db.all("PRAGMA table_info(users)", (err, cols) => {
                 if (cols && !cols.find(c => c.name === 'push_token')) {
                     db.run('ALTER TABLE users ADD COLUMN push_token TEXT', (err) => {
@@ -87,9 +87,44 @@ const db = new sqlite3.Database(dbPath, (err) => {
                         if (!err) console.log('Added phone_number column to users table');
                     });
                 }
+                if (cols && !cols.find(c => c.name === 'schedule_data')) {
+                    db.run('ALTER TABLE users ADD COLUMN schedule_data TEXT', (err) => {
+                        if (!err) console.log('Added schedule_data column to users table');
+                    });
+                }
+                if (cols && !cols.find(c => c.name === 'adherence_data')) {
+                    db.run('ALTER TABLE users ADD COLUMN adherence_data TEXT', (err) => {
+                        if (!err) console.log('Added adherence_data column to users table');
+                    });
+                }
             });
         });
     }
+});
+
+// --- Patient Schedule Persistence ---
+// Save patient's schedule + adherence state (called when patient takes meds)
+app.post('/api/users/:id/schedule', (req, res) => {
+    const { schedule, adherence, monthly } = req.body;
+    const data = JSON.stringify({ schedule, adherence, monthly });
+    db.run('UPDATE users SET schedule_data = ? WHERE id = ?', [data, req.params.id], function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
+// Fetch patient's schedule (called by caretaker on app open)
+app.get('/api/users/:id/schedule', (req, res) => {
+    db.get('SELECT schedule_data FROM users WHERE id = ?', [req.params.id], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row || !row.schedule_data) return res.json({ schedule: null, adherence: null, monthly: null });
+        try {
+            const parsed = JSON.parse(row.schedule_data);
+            res.json(parsed);
+        } catch {
+            res.json({ schedule: null, adherence: null, monthly: null });
+        }
+    });
 });
 
 // --- SSE Real-Time Connections ---
@@ -203,20 +238,27 @@ const getCaringForArray = (dbVal) => {
 app.post('/api/notify', (req, res) => {
     const { targetRole, patientName, type, title, body, payload } = req.body;
 
-    // Find users who should receive this
-    let query = '';
-    let params = [];
-
     if (targetRole === 'caretaker' && patientName) {
+        console.log(`[Notify] Looking for caretakers caring for: "${patientName}"`);
         db.all('SELECT id, caringFor FROM users WHERE role = ?', ['caretaker'], (err, rows) => {
             if (err) return res.status(500).json({ error: err.message });
             
+            let matched = 0;
             rows.forEach(row => {
                 const arr = getCaringForArray(row.caringFor);
+                console.log(`[Notify] Caretaker ${row.id} caringFor: ${JSON.stringify(arr)}`);
                 if (arr.includes(patientName)) {
+                    matched++;
+                    console.log(`[Notify] ✅ Broadcasting '${type}' to caretaker ${row.id}`);
                     broadcastEvent(row.id, type, { title, body, payload });
+                    // Also send a push notification so it works even if SSE dropped
+                    sendPushNotification(row.id, title, body);
                 }
             });
+            
+            if (matched === 0) {
+                console.log(`[Notify] ⚠️ No caretakers matched for patient "${patientName}"`);
+            }
             res.sendStatus(200);
         });
     } else {
@@ -473,6 +515,50 @@ app.post('/api/patients/drop-caretaker', (req, res) => {
                     if (processed === rows.length) res.json({ success: true, message: 'No caretakers matched' });
                 }
             }
+        });
+    });
+});
+
+// Caretaker drops a patient from their list
+app.post('/api/caretakers/drop-patient', (req, res) => {
+    const { caretaker_id, patient_name } = req.body;
+    if (!caretaker_id || !patient_name) return res.status(400).json({ error: 'caretaker_id and patient_name are required' });
+
+    db.get('SELECT id, caringFor FROM users WHERE id = ? AND role = ?', [caretaker_id, 'caretaker'], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!row) return res.status(404).json({ error: 'Caretaker not found' });
+
+        const arr = getCaringForArray(row.caringFor);
+        if (!arr.includes(patient_name)) {
+            return res.status(404).json({ error: 'Patient not in your list' });
+        }
+
+        const newArr = arr.filter(n => n !== patient_name);
+        db.run('UPDATE users SET caringFor = ? WHERE id = ?', [JSON.stringify(newArr), caretaker_id], (updateErr) => {
+            if (updateErr) return res.status(500).json({ error: updateErr.message });
+
+            // Find the patient, delete their meds, and notify them
+            db.get('SELECT id FROM users WHERE fullName = ? OR name = ? LIMIT 1', [patient_name, patient_name], (lookupErr, patientRow) => {
+                if (!lookupErr && patientRow) {
+                    // Delete all medications belonging to this patient
+                    db.run('DELETE FROM medications WHERE user_id = ?', [patientRow.id], (delErr) => {
+                        if (delErr) {
+                            console.error(`[Drop] Failed to delete meds for patient ${patientRow.id}:`, delErr);
+                        } else {
+                            console.log(`[Drop] Deleted all medications for patient ${patientRow.id} (${patient_name})`);
+                        }
+                    });
+
+                    // Notify the patient that they were dropped and their meds were cleared
+                    broadcastEvent(patientRow.id, 'caretaker_dropped', {
+                        title: 'Caretaker Removed',
+                        body: `Your caretaker has removed you from their dashboard. Your medications have been cleared.`,
+                        meds_cleared: true
+                    });
+                }
+            });
+
+            res.json({ success: true, caringFor: newArr });
         });
     });
 });

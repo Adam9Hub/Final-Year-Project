@@ -351,7 +351,7 @@ export default function AddMedicationScreen({ route, navigation }) {
             }
         }
 
-        await addMedication({
+        addMedication({
             name: name.trim(),
             dosage: dosage.trim(),
             frequency,

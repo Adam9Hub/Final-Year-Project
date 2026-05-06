@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
@@ -8,7 +8,7 @@ import { API_BASE_URL } from '../config';
 import { colors, borderRadius, spacing, fontSize as fs, shadows, normalize } from '../theme';
 
 export default function CaretakerFamilyScreen() {
-    const { user, showToast, patientsList } = useApp();
+    const { user, showToast, patientsList, updateUser } = useApp();
     const [inviteCode, setInviteCode] = useState(null);
     const [isGenerating, setIsGenerating] = useState(false);
 
@@ -45,6 +45,38 @@ export default function CaretakerFamilyScreen() {
         }
     };
 
+    const dropPatient = (patientName) => {
+        Alert.alert(
+            'Remove Patient',
+            `Are you sure you want to remove ${patientName} from your patients list?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Remove',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            const res = await fetch(`${API_BASE_URL}/api/caretakers/drop-patient`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ caretaker_id: user.id, patient_name: patientName })
+                            });
+                            const data = await res.json();
+                            if (res.ok) {
+                                updateUser({ caringFor: JSON.stringify(data.caringFor) });
+                                showToast(`${patientName} removed`, 'info');
+                            } else {
+                                showToast(data.error || 'Failed to remove patient', 'error');
+                            }
+                        } catch {
+                            showToast('Server error', 'error');
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -59,13 +91,17 @@ export default function CaretakerFamilyScreen() {
                                 <View style={styles.patientAvatar}>
                                     <Ionicons name="person" size={24} color={colors.bluePrimary} />
                                 </View>
-                                <View>
+                                <View style={{ flex: 1 }}>
                                     <Text style={styles.patientName}>{patientName}</Text>
                                     <View style={styles.statusBadge}>
                                         <View style={styles.statusDot} />
                                         <Text style={styles.statusText}>Connected</Text>
                                     </View>
                                 </View>
+                                <TouchableOpacity style={styles.dropBtn} onPress={() => dropPatient(patientName)} activeOpacity={0.7}>
+                                    <Ionicons name="close-circle-outline" size={20} color={colors.danger || '#E53E3E'} />
+                                    <Text style={styles.dropBtnText}>Remove</Text>
+                                </TouchableOpacity>
                             </View>
                         ))
                     ) : (
@@ -162,4 +198,6 @@ const styles = StyleSheet.create({
     stepNum: { width: normalize(28), height: normalize(28), borderRadius: normalize(14), backgroundColor: colors.blueLight, justifyContent: 'center', alignItems: 'center' },
     stepNumText: { color: colors.bluePrimary, fontWeight: '700', fontSize: fs.sm },
     stepText: { flex: 1, fontSize: fs.md, color: colors.textSecondary, lineHeight: 20 },
+    dropBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: borderRadius.md, backgroundColor: '#FEE2E2' },
+    dropBtnText: { fontSize: fs.sm, color: colors.danger || '#E53E3E', fontWeight: '600' },
 });

@@ -163,13 +163,17 @@ export async function scheduleMedicationReminders(medications, soundEnabled = tr
                     }
                 } else {
                     // Schedule daily repeating for all other frequencies
-                    // On-time notification
+                    // iOS can delay scheduled notifications by ~1 min, so we offset by 1 min early
+                    const adjustedMinute = parsed.minute > 0 ? parsed.minute - 1 : 59;
+                    const adjustedHour = parsed.minute > 0 ? parsed.hour : (parsed.hour > 0 ? parsed.hour - 1 : 23);
+
+                    // On-time notification (offset 1 min early for iOS delivery delay)
                     await Notifications.scheduleNotificationAsync({
                         content,
                         trigger: {
                             type: Notifications.SchedulableTriggerInputTypes.DAILY,
-                            hour: parsed.hour,
-                            minute: parsed.minute,
+                            hour: adjustedHour,
+                            minute: adjustedMinute,
                             repeats: true,
                         },
                     });

@@ -344,6 +344,13 @@ export function AppProvider({ children }) {
                         addNotificationRef.current('info', data.title, data.body);
                         showToastRef.current(data.title, 'info');
                         sendInstantNotification(data.title, data.body);
+
+                        // If the caretaker cleared our meds, wipe local state
+                        if (data.meds_cleared) {
+                            setMedications([]);
+                            setSchedule({});
+                        }
+
                         // Refresh the full user from the server to get the updated caringFor list
                         fetch(`${API_BASE_URL}/api/users`)
                             .then(r => r.json())
@@ -404,6 +411,25 @@ export function AppProvider({ children }) {
                 if (Array.isArray(data)) setMedications(data);
             })
             .catch(err => console.error('Failed to load medications from API:', err));
+
+        // If caretaker, also fetch the patient's server-side schedule (so we see taken status even if our app was closed)
+        if (user.role === 'caretaker' && selectedPatientName) {
+            // Look up patient ID first
+            fetch(`${API_BASE_URL}/api/users`)
+                .then(r => r.json())
+                .then(users => {
+                    const patient = users.find(u => u.name === selectedPatientName || u.fullName === selectedPatientName);
+                    if (!patient) return;
+                    return fetch(`${API_BASE_URL}/api/users/${patient.id}/schedule`);
+                })
+                .then(r => r ? r.json() : null)
+                .then(data => {
+                    if (data && data.schedule) setSchedule(data.schedule);
+                    if (data && data.adherence) setWeeklyAdherence(data.adherence);
+                    if (data && data.monthly) setMonthlyAdherence(data.monthly);
+                })
+                .catch(err => console.error('Failed to load patient schedule:', err));
+        }
     }, [user, selectedPatientName, patientsList]);
 
     // ── Push Notification Scheduling ──
@@ -619,10 +645,10 @@ export function AppProvider({ children }) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         targetRole: 'caretaker',
-                        patientName: user.name,
+                        patientName: user.fullName || user.name,
                         type: 'med_taken',
                         title: 'Medication Taken',
-                        body: `${user.name} took their ${period} dose at ${timeStr}`,
+                        body: `${user.fullName || user.name} took their ${period} dose at ${timeStr}`,
                         payload: { schedule: newSchedule, adherence: newAdherence, monthly: newMonthly }
                     })
                 });
@@ -687,7 +713,7 @@ export function AppProvider({ children }) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         targetRole: 'caretaker',
-                        patientName: user.name,
+                        patientName: user.fullName || user.name,
                         type: 'med_taken',
                         title: 'Medications Taken',
                         body: notifyMsg,
@@ -698,7 +724,18 @@ export function AppProvider({ children }) {
                 console.error('Failed to notify caretaker:', err);
             }
         }
-    }, [user, medications, schedule, weeklyAdherence, addNotification]);
+
+        // Persist schedule to the server so caretaker can fetch it later (even if their phone was off)
+        try {
+            await fetch(`${API_BASE_URL}/api/users/${user.id}/schedule`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schedule: newSchedule, adherence: newAdherence, monthly: newMonthly })
+            });
+        } catch (err) {
+            console.error('Failed to save schedule to server:', err);
+        }
+    }, [user, medications, schedule, weeklyAdherence, monthlyAdherence, addNotification]);
 
     const resetSchedule = useCallback(() => {
         const base = isDemoUser(user) ? DEMO_SCHEDULE : EMPTY_SCHEDULE;
@@ -790,7 +827,6 @@ export function AppProvider({ children }) {
         // Notify caretaker that medications were postponed
         if (user?.name) {
             try {
-                // Build the updated schedule from the shifted meds so caretaker sees new times
                 const newSchedule = generateScheduleFromMeds(updatedMeds, schedule);
                 await fetch(`${API_BASE_URL}/api/notify`, {
                     method: 'POST',
@@ -809,7 +845,19 @@ export function AppProvider({ children }) {
                 console.error('[Postpone] Failed to notify caretaker:', err);
             }
         }
-    }, [schedule, medications, showToast, addNotification, user?.id, user?.name]);
+
+        // Persist the delayed schedule to the server
+        try {
+            const newSchedule = generateScheduleFromMeds(updatedMeds, schedule);
+            await fetch(`${API_BASE_URL}/api/users/${user.id}/schedule`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schedule: newSchedule, adherence: weeklyAdherence, monthly: monthlyAdherence })
+            });
+        } catch (err) {
+            console.error('[Postpone] Failed to save schedule to server:', err);
+        }
+    }, [schedule, medications, showToast, addNotification, user, weeklyAdherence, monthlyAdherence, generateScheduleFromMeds]);
 
     // ── Settings ──
     const updateSetting = useCallback((key, value) => {
